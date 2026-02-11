@@ -1,0 +1,2 @@
+IMU2sonar: [0, 0, 0, 173.24, -10.43, -71,30] 
+# We ignore the translation for now since we are using the relative transition in this case.

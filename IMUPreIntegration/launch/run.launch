@@ -1,0 +1,43 @@
+<!-- <launch>
+    <node pkg="imu_preintegration" type="imu_pre_integration_node.py" name="imu_pre_integration_node" output="screen"/>
+    <node pkg="tf2_ros" type="static_transform_publisher" name="imu_to_sonar_tf" args="0 0 0 0.02393 0.0624813 -3.10248 sonar_3d base_link" />
+    <node pkg="tf2_ros" type="static_transform_publisher" name="imu0_to_sonar0_tf" args="0 0 0 0.02393 0.0624813 -3.10248 odom world" />
+    <node pkg="rviz" type="rviz" name="rviz" args="-d $(find imu_preintegration)/rviz/rviz.rviz" />
+</launch> -->
+
+<launch>
+      <!-- Arguments -->
+      <arg name="bagfile" default=""/>
+      <arg name="use_sim_time" default="true"/>
+      
+      <param name="/use_sim_time" value="$(arg use_sim_time)"/>
+
+      <node pkg="tf2_ros" type="static_transform_publisher" name="world_to_odom_tf" 
+            args="0 0 0 0 0 0 world odom" />   
+             
+      <!-- sonar_3d -> MiniAHRS -->
+    <node pkg="tf2_ros" type="static_transform_publisher" name="sonar_to_imu_tf" 
+          args="0 0 0 1.56107 0.0747417 3.12156 sonar_3d MiniAHRS" />
+
+      <!-- KISS-ICP Odometry from Sonar -->
+      <node pkg="kiss_icp" type="odometry_node" name="kiss_icp_node" output="screen">
+            <remap from="/pointcloud_topic" to="/sonar_3d/point_cloud"/>
+            <param name="odom_frame" value="odom"/>
+            <param name="base_frame" value="sonar_3d"/>
+            <param name="visualize" value="true"/>
+            <param name="max_range" value="10.0"/>
+            <param name="min_range" value="0.5"/>
+      </node>
+
+    <!-- IMU Preintegration -->
+      <node pkg="imu_preintegration" type="imu_pre_integration_node.py" 
+          name="imu_preintegration_node" output="screen" required="true"/>
+
+      <node if="$(eval bagfile != '')" 
+            pkg="rosbag" type="play" name="rosbag_play"
+            args="--clock $(arg bagfile)" 
+            output="screen"/>
+          
+      <node pkg="rviz" type="rviz" name="rviz" 
+            args="-d $(find imu_preintegration)/rviz/rviz.rviz" />
+</launch>

@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<launch>
+	<arg name="sonar_topic" default="/sonar_3d/point_cloud"/>
+	<arg name="kiss_odometry_topic" default="/kiss/odometry"/>
+	<arg name="kiss_cloud_topic" default="/kiss/frame"/>
+	<arg name="okvis_odometry_topic" default="/okvis_node/okvis_odometry"/>
+	
+	<!--include file="$(find okvis_ros)/launch/svin_gopro13_uw.launch"/-->
+	
+	<include file="$(find kiss_icp)/launch/odometry.launch">
+		<arg name="topic" value="$(arg sonar_topic)"/>
+		<arg name="imu_topic" value="$(arg okvis_odometry_topic)"/>
+	</include>
+	
+	<include file="$(find simple_loop_closure)/launch/run_kiss_icp.launch">
+		<arg name="odometry_topic" value="$(arg kiss_odometry_topic)"/>
+		<arg name="cloud_topic" default="$(arg kiss_cloud_topic)"/>
+	</include>
+
+  	<!--node pkg="tf2_ros" type="static_transform_publisher" name="GoPRO_to_SONAR_tf" args="0 0 0 -1.2444 -0.1820 3.0235 world odom" /-->
+	<node pkg="tf2_ros" type="static_transform_publisher" name="SONAR_to_SONAR_tf" args="0 0 0 3.14 0 0 base_link sonar_3d" />
+</launch>
