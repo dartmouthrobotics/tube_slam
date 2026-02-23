@@ -1,4 +1,5 @@
 #include <simple_loop_closure/simple_loop_closure_node.hpp>
+#include <gtsam/slam/dataset.h> 
    
 class SimpleLoopClosureNode
 {
@@ -75,6 +76,8 @@ private:
   double fitness_score_th_;
   int vis_map_cloud_frame_interval_;
 
+  bool downsample_pointcloud_;
+
   bool stop_loop_closure_thread_;
   bool stop_visualize_thread_;
 
@@ -106,8 +109,13 @@ private:
     source_voxel_leaf_size_ = nh_private_.param("source_voxel_leaf_size", 0.4);
     vis_map_voxel_leaf_size_ = nh_private_.param("vis_map_voxel_leaf_size", 0.8);
     fitness_score_th_ = nh_private_.param("fitness_score_th", 0.3);
+
+    downsample_pointcloud_ = nh_private_.param("downsample_pointcloud", true);
+
     vis_map_cloud_frame_interval_ = nh_private_.param("vis_map_cloud_frame_interval", 3);
-    
+
+    save_directory_ = nh_private_.param<std::string>("save_directory", "/root/catkin_ws");
+
     sub_cloud_.subscribe(nh_, "/cloud", 50);
     sub_odom_.subscribe(nh_, "/odometry", 50);
 
@@ -125,7 +133,9 @@ private:
 
     vg_target_.setLeafSize(target_voxel_leaf_size_, target_voxel_leaf_size_, target_voxel_leaf_size_);
     vg_source_.setLeafSize(source_voxel_leaf_size_, source_voxel_leaf_size_, source_voxel_leaf_size_);
-    vg_map_.setLeafSize(vis_map_voxel_leaf_size_, vis_map_voxel_leaf_size_, vis_map_voxel_leaf_size_);
+    if (downsample_pointcloud_) {
+        vg_map_.setLeafSize(vis_map_voxel_leaf_size_, vis_map_voxel_leaf_size_, vis_map_voxel_leaf_size_);
+    }
 
     added_odom_id_ = 0;
     searched_loop_id_ = 0;
@@ -337,6 +347,8 @@ private:
         trajectory_dist_.push_back(trajectory_dist_.back() + (keyframes_odom_.back()->translation() - affine_curr->translation()).norm());
       
       keyframes_cloud_.push_back(cloud_curr);
+      // TODO: Make this a parameter
+      saveTimestampsFromKeyframes(keyframes_cloud_, save_directory_ + "/time.txt");
       keyframes_odom_.push_back(affine_curr);
     }
   }
@@ -390,13 +402,17 @@ private:
       return;
 
     // PointCloudType map_cloud_ds_;
-  
-    // vg_map_.setInputCloud(map_cloud);
-    // vg_map_.filter(map_cloud_ds_);
-
+    
     sensor_msgs::PointCloud2 map_cloud_msg;
-    // pcl::toROSMsg(map_cloud_ds_, map_cloud_msg);
-    pcl::toROSMsg(*map_cloud, map_cloud_msg);
+    if (downsample_pointcloud_) {
+      PointCloudType map_cloud_ds_;
+      vg_map_.setInputCloud(map_cloud);
+      vg_map_.filter(map_cloud_ds_);
+      pcl::toROSMsg(map_cloud_ds_, map_cloud_msg);
+    }
+    else{
+      pcl::toROSMsg(*map_cloud, map_cloud_msg);
+    }
     map_cloud_msg.header.stamp = ros::Time::now();
     map_cloud_msg.header.frame_id = odom_frame_id_;
 
@@ -783,6 +799,8 @@ private:
     {
       MtxLockGuard guard(mtx_res_);
       optimization_result_ = isam2_.calculateEstimate();
+      // TODO: Make this a parameter
+      gtsam::writeG2o(gtsam::NonlinearFactorGraph(), optimization_result_, save_directory_ + "/result.g2o");
     }
 
     return true;
@@ -803,6 +821,34 @@ private:
 
       rate.sleep();
     }
+      }
+  
+  void saveTimestampsFromKeyframes(const std::deque<PointCloudType::Ptr>& keyframes, const std::string& filename) {
+    std::ofstream ofs(filename);
+    if (!ofs.is_open()) {
+        std::cerr << "Failed to open file " << filename << std::endl;
+        return;
+    }
+    
+    ofs << std::fixed << std::setprecision(9);
+
+    for (size_t i = 0; i < keyframes.size(); ++i) {
+        if (!keyframes[i]) {
+            std::cerr << "Warning: null cloud at index " << i << std::endl;
+            continue;
+        }
+
+        // Convert PCL timestamp to ros::Time
+        ros::Time ros_stamp = pcl_conversions::fromPCL(keyframes[i]->header.stamp);
+
+        // Save as seconds (double) or seconds + nanoseconds, your choice
+        double time_in_sec = ros_stamp.toSec();
+
+        ofs << time_in_sec << "\n";
+    }
+
+    ofs.close();
+    // std::cout << "Saved timestamps of " << keyframes.size() << " clouds to " << filename << std::endl;
   }
 
 public:
