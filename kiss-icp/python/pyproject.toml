@@ -4,13 +4,15 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "kiss-icp"
-version = "0.3.0"
+version = "1.2.3"
 description = "Simple yet effective 3D LiDAR-Odometry registration pipeline"
 readme = "README.md"
 authors = [
     { name = "Ignacio Vizzo", email = "ignaciovizzo@gmail.com" },
+    { name = "Tiziano Guadagnino", email = "frevo93@gmail.com" },
+    { name = "Benedikt Mersch", email = "benedikt.mersch@gmail.com" },
 ]
-requires-python = ">=3.7"
+requires-python = ">=3.8"
 keywords = [
     "LiDAR",
     "Localization",
@@ -28,16 +30,16 @@ classifiers = [
     "Operating System :: Unix",
     "Programming Language :: C++",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.7",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
     "natsort",
     "numpy",
-    "plyfile",
     "pydantic>=2",
     "pydantic-settings",
     "pyquaternion",
@@ -48,11 +50,13 @@ dependencies = [
 
 [project.optional-dependencies]
 all = [
-    "open3d>=0.13",
-    "ouster-sdk>=0.7.1",
+    "open3d>=0.16",
+    "polyscope>=2.4.0",
+    "ouster-sdk>=0.11",
     "pyntcloud",
     "PyYAML",
     "trimesh",
+    "rosbags>=0.10,<0.12",
 ]
 test = [
     "pytest",
@@ -63,6 +67,7 @@ visualizer = [
 
 [project.scripts]
 kiss_icp_pipeline = "kiss_icp.tools.cmd:run"
+kiss_icp_dump_config = "kiss_icp.config.parser:write_config"
 
 [project.urls]
 Homepage = "https://github.com/PRBonn/kiss-icp"
@@ -91,7 +96,7 @@ archs = ["auto64"]
 skip = ["*-musllinux*",  "pp*", "cp36-*"]
 
 [tool.cibuildwheel.macos]
-environment = "MACOSX_DEPLOYMENT_TARGET=10.14"
+environment = "MACOSX_DEPLOYMENT_TARGET=11.0"
 archs = ["auto64", "arm64"]
 
 [tool.pytest.ini_options]

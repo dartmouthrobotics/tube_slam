@@ -28,14 +28,21 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from kiss_icp.config.config import AdaptiveThresholdConfig, DataConfig, MappingConfig
+from kiss_icp.config.config import (
+    AdaptiveThresholdConfig,
+    DataConfig,
+    MappingConfig,
+    RegistrationConfig,
+)
 
 
 class KISSConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="kiss_icp_")
     out_dir: str = "results"
     data: DataConfig = DataConfig()
+    registration: RegistrationConfig = RegistrationConfig()
     mapping: MappingConfig = MappingConfig()
     adaptive_threshold: AdaptiveThresholdConfig = AdaptiveThresholdConfig()
 
@@ -57,19 +64,10 @@ def _yaml_source(config_file: Optional[Path]) -> Dict[str, Any]:
     return data or {}
 
 
-def load_config(
-    config_file: Optional[Path], deskew: Optional[bool], max_range: Optional[float]
-) -> KISSConfig:
-    """Load configuration from an Optional yaml file. Additionally, deskew and max_range can be
-    also specified from the CLI interface"""
+def load_config(config_file: Optional[Path]) -> KISSConfig:
+    """Load configuration from an optional yaml file."""
 
     config = KISSConfig(**_yaml_source(config_file))
-
-    # Override defaults from command line
-    if deskew is not None:
-        config.data.deskew = deskew
-    if max_range is not None:
-        config.data.max_range = max_range
 
     # Check if there is a possible mistake
     if config.data.max_range < config.data.min_range:
@@ -83,10 +81,10 @@ def load_config(
     return config
 
 
-def write_config(config: KISSConfig, filename: str):
+def write_config(config: KISSConfig = KISSConfig(), filename: str = "kiss_icp.yaml"):
     with open(filename, "w") as outfile:
         try:
             yaml = importlib.import_module("yaml")
-            yaml.dump(config.dict(), outfile, default_flow_style=False)
+            yaml.dump(config.model_dump(), outfile, default_flow_style=False)
         except ModuleNotFoundError:
-            outfile.write(str(config.dict()))
+            outfile.write(str(config.model_dump()))

@@ -26,15 +26,20 @@ from pydantic import BaseModel
 
 
 class DataConfig(BaseModel):
-    preprocess: bool = True
     max_range: float = 100.0
-    min_range: float = 5.0
-    deskew: bool = False
+    min_range: float = 0.0
+    deskew: bool = True
 
 
 class MappingConfig(BaseModel):
     voxel_size: Optional[float] = None  # default: take it from data
     max_points_per_voxel: int = 20
+
+
+class RegistrationConfig(BaseModel):
+    max_num_iterations: Optional[int] = 500
+    convergence_criterion: Optional[float] = 0.0001
+    max_num_threads: Optional[int] = 0  # 0 means automatic
 
 
 class AdaptiveThresholdConfig(BaseModel):

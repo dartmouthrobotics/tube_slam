@@ -30,7 +30,7 @@ import numpy as np
 
 
 class NuScenesDataset:
-    def __init__(self, data_dir: Path, sequence: int, *_, **__):
+    def __init__(self, data_dir: Path, sequence: str, *_, **__):
         try:
             importlib.import_module("nuscenes")
         except ModuleNotFoundError:
@@ -49,7 +49,7 @@ class NuScenesDataset:
         from nuscenes.nuscenes import NuScenes
         from nuscenes.utils.splits import create_splits_logs
 
-        self.sequence_id = str(int(sequence)).zfill(4)
+        self.sequence_id = str(sequence).zfill(4)
 
         self.nusc = NuScenes(dataroot=str(data_dir), version=nusc_version)
         self.scene_name = f"scene-{self.sequence_id}"
@@ -76,7 +76,7 @@ class NuScenesDataset:
         return len(self.lidar_tokens)
 
     def __getitem__(self, idx):
-        return self.read_point_cloud(self.lidar_tokens[idx])
+        return self.read_point_cloud(self.lidar_tokens[idx]), np.array([])
 
     def read_point_cloud(self, token: str):
         filename = self.nusc.get("sample_data", token)["filename"]

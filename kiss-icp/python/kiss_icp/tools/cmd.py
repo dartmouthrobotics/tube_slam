@@ -54,9 +54,8 @@ def guess_dataloader(data: Path, default_dataloader: str):
         if (data / "metadata.yaml").exists():
             # a directory with a metadata.yaml must be a ROS2 bagfile
             return "rosbag", data
-        bagfiles = [Path(path) for path in glob.glob(os.path.join(data, "*.bag"))]
-        if len(bagfiles) > 0:
-            return "rosbag", bagfiles
+        if len(glob.glob(os.path.join(data, "*.bag"))) > 0:
+            return "rosbag", data
     return default_dataloader, data
 
 
@@ -114,6 +113,10 @@ $ kiss_icp_pipeline --visualize <path-to-ouster.pcap>:page_facing_up: \[--meta <
 
 # Use a more specific dataloader: {", ".join(_available_dl_help)}
 $ kiss_icp_pipeline --dataloader kitti --sequence 07 --visualize <path-to-kitti-root>:open_file_folder:
+
+# To change single config parameters on-the-fly, you can export them beforehand:
+$ export kiss_icp_out_dir='<path-to-logs>:open_file_folder:'
+$ export kiss_icp_data='{{"max_range": 50}}'
 """
 
 
@@ -139,20 +142,7 @@ def kiss_icp_pipeline(
         show_default=False,
         help="[Optional] Path to the configuration file",
     ),
-    max_range: Optional[float] = typer.Option(
-        None,
-        "--max_range",
-        show_default=False,
-        help="[Optional] Overrides the max_range from the default configuration",
-    ),
-    deskew: bool = typer.Option(
-        False,
-        "--deskew",
-        help="[Optional] Whether or not to deskew the scan or not",
-        show_default=False,
-        is_flag=True,
-    ),
-    # Aditional Options ---------------------------------------------------------------------------
+    # Additional Options ---------------------------------------------------------------------------
     visualize: bool = typer.Option(
         False,
         "--visualize",
@@ -160,7 +150,7 @@ def kiss_icp_pipeline(
         help="[Optional] Open an online visualization of the KISS-ICP pipeline",
         rich_help_panel="Additional Options",
     ),
-    sequence: Optional[int] = typer.Option(
+    sequence: Optional[str] = typer.Option(
         None,
         "--sequence",
         "-s",
@@ -222,7 +212,6 @@ def kiss_icp_pipeline(
         print(f"[WARNING] '{dataloader}' does not support '--jump', starting from first frame")
         jump = 0
 
-    # Lazy-loading for faster CLI
     from kiss_icp.datasets import dataset_factory
     from kiss_icp.pipeline import OdometryPipeline
 
@@ -236,8 +225,6 @@ def kiss_icp_pipeline(
             meta=meta,
         ),
         config=config,
-        deskew=deskew,
-        max_range=max_range,
         visualize=visualize,
         n_scans=n_scans,
         jump=jump,

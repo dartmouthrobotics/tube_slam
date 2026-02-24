@@ -22,128 +22,72 @@
 // SOFTWARE.
 #include "VoxelHashMap.hpp"
 
-#include <tbb/blocked_range.h>
-#include <tbb/parallel_reduce.h>
-
 #include <Eigen/Core>
 #include <algorithm>
-#include <limits>
-#include <tuple>
-#include <utility>
+#include <array>
+#include <sophus/se3.hpp>
 #include <vector>
 
-// This parameters are not intended to be changed, therefore we do not expose it
+#include "VoxelUtils.hpp"
+
 namespace {
-struct ResultTuple {
-    ResultTuple(std::size_t n) {
-        source.reserve(n);
-        target.reserve(n);
-    }
-    std::vector<Eigen::Vector3d> source;
-    std::vector<Eigen::Vector3d> target;
-};
+using kiss_icp::Voxel;
+static const std::array<Voxel, 27> voxel_shifts{
+    {Voxel{0, 0, 0},   Voxel{1, 0, 0},   Voxel{-1, 0, 0},  Voxel{0, 1, 0},   Voxel{0, -1, 0},
+     Voxel{0, 0, 1},   Voxel{0, 0, -1},  Voxel{1, 1, 0},   Voxel{1, -1, 0},  Voxel{-1, 1, 0},
+     Voxel{-1, -1, 0}, Voxel{1, 0, 1},   Voxel{1, 0, -1},  Voxel{-1, 0, 1},  Voxel{-1, 0, -1},
+     Voxel{0, 1, 1},   Voxel{0, 1, -1},  Voxel{0, -1, 1},  Voxel{0, -1, -1}, Voxel{1, 1, 1},
+     Voxel{1, 1, -1},  Voxel{1, -1, 1},  Voxel{1, -1, -1}, Voxel{-1, 1, 1},  Voxel{-1, 1, -1},
+     Voxel{-1, -1, 1}, Voxel{-1, -1, -1}}};
 }  // namespace
 
 namespace kiss_icp {
 
-VoxelHashMap::Vector3dVectorTuple VoxelHashMap::GetCorrespondences(
-    const Vector3dVector &points, double max_correspondance_distance) const {
-    // Lambda Function to obtain the KNN of one point, maybe refactor
-    auto GetClosestNeighboor = [&](const Eigen::Vector3d &point) {
-        auto kx = static_cast<int>(point[0] / voxel_size_);
-        auto ky = static_cast<int>(point[1] / voxel_size_);
-        auto kz = static_cast<int>(point[2] / voxel_size_);
-        std::vector<Voxel> voxels;
-        voxels.reserve(27);
-        for (int i = kx - 1; i < kx + 1 + 1; ++i) {
-            for (int j = ky - 1; j < ky + 1 + 1; ++j) {
-                for (int k = kz - 1; k < kz + 1 + 1; ++k) {
-                    voxels.emplace_back(i, j, k);
-                }
+std::tuple<Eigen::Vector3d, double> VoxelHashMap::GetClosestNeighbor(
+    const Eigen::Vector3d &query) const {
+    // Convert the point to voxel coordinates
+    const auto &voxel = PointToVoxel(query, voxel_size_);
+    // Find the nearest neighbor
+    Eigen::Vector3d closest_neighbor = Eigen::Vector3d::Zero();
+    double closest_distance = std::numeric_limits<double>::max();
+    std::for_each(voxel_shifts.cbegin(), voxel_shifts.cend(), [&](const auto &voxel_shift) {
+        const auto &query_voxel = voxel + voxel_shift;
+        auto search = map_.find(query_voxel);
+        if (search != map_.end()) {
+            const auto &points = search.value();
+            const Eigen::Vector3d &neighbor = *std::min_element(
+                points.cbegin(), points.cend(), [&](const auto &lhs, const auto &rhs) {
+                    return (lhs - query).norm() < (rhs - query).norm();
+                });
+            double distance = (neighbor - query).norm();
+            if (distance < closest_distance) {
+                closest_neighbor = neighbor;
+                closest_distance = distance;
             }
         }
-
-        using Vector3dVector = std::vector<Eigen::Vector3d>;
-        Vector3dVector neighboors;
-        neighboors.reserve(27 * max_points_per_voxel_);
-        std::for_each(voxels.cbegin(), voxels.cend(), [&](const auto &voxel) {
-            auto search = map_.find(voxel);
-            if (search != map_.end()) {
-                const auto &points = search->second.points;
-                if (!points.empty()) {
-                    for (const auto &point : points) {
-                        neighboors.emplace_back(point);
-                    }
-                }
-            }
-        });
-
-        Eigen::Vector3d closest_neighbor;
-        double closest_distance2 = std::numeric_limits<double>::max();
-        std::for_each(neighboors.cbegin(), neighboors.cend(), [&](const auto &neighbor) {
-            double distance = (neighbor - point).squaredNorm();
-            if (distance < closest_distance2) {
-                closest_neighbor = neighbor;
-                closest_distance2 = distance;
-            }
-        });
-
-        return closest_neighbor;
-    };
-    using points_iterator = std::vector<Eigen::Vector3d>::const_iterator;
-    const auto [source, target] = tbb::parallel_reduce(
-        // Range
-        tbb::blocked_range<points_iterator>{points.cbegin(), points.cend()},
-        // Identity
-        ResultTuple(points.size()),
-        // 1st lambda: Parallel computation
-        [max_correspondance_distance, &GetClosestNeighboor](
-            const tbb::blocked_range<points_iterator> &r, ResultTuple res) -> ResultTuple {
-            auto &[src, tgt] = res;
-            src.reserve(r.size());
-            tgt.reserve(r.size());
-            for (const auto &point : r) {
-                Eigen::Vector3d closest_neighboors = GetClosestNeighboor(point);
-                if ((closest_neighboors - point).norm() < max_correspondance_distance) {
-                    src.emplace_back(point);
-                    tgt.emplace_back(closest_neighboors);
-                }
-            }
-            return res;
-        },
-        // 2nd lambda: Parallel reduction
-        [](ResultTuple a, const ResultTuple &b) -> ResultTuple {
-            auto &[src, tgt] = a;
-            const auto &[srcp, tgtp] = b;
-            src.insert(src.end(),  //
-                       std::make_move_iterator(srcp.begin()), std::make_move_iterator(srcp.end()));
-            tgt.insert(tgt.end(),  //
-                       std::make_move_iterator(tgtp.begin()), std::make_move_iterator(tgtp.end()));
-            return a;
-        });
-
-    return std::make_tuple(source, target);
+    });
+    return std::make_tuple(closest_neighbor, closest_distance);
 }
 
 std::vector<Eigen::Vector3d> VoxelHashMap::Pointcloud() const {
     std::vector<Eigen::Vector3d> points;
-    points.reserve(max_points_per_voxel_ * map_.size());
-    for (const auto &[voxel, voxel_block] : map_) {
-        (void)voxel;
-        for (const auto &point : voxel_block.points) {
-            points.push_back(point);
-        }
-    }
+    points.reserve(map_.size() * static_cast<size_t>(max_points_per_voxel_));
+    std::for_each(map_.cbegin(), map_.cend(), [&](const auto &map_element) {
+        const auto &voxel_points = map_element.second;
+        points.insert(points.end(), voxel_points.cbegin(), voxel_points.cend());
+    });
+    points.shrink_to_fit();
     return points;
 }
 
-void VoxelHashMap::Update(const Vector3dVector &points, const Eigen::Vector3d &origin) {
+void VoxelHashMap::Update(const std::vector<Eigen::Vector3d> &points,
+                          const Eigen::Vector3d &origin) {
     AddPoints(points);
     RemovePointsFarFromLocation(origin);
 }
 
-void VoxelHashMap::Update(const Vector3dVector &points, const Sophus::SE3d &pose) {
-    Vector3dVector points_transformed(points.size());
+void VoxelHashMap::Update(const std::vector<Eigen::Vector3d> &points, const Sophus::SE3d &pose) {
+    std::vector<Eigen::Vector3d> points_transformed(points.size());
     std::transform(points.cbegin(), points.cend(), points_transformed.begin(),
                    [&](const auto &point) { return pose * point; });
     const Eigen::Vector3d &origin = pose.translation();
@@ -151,24 +95,38 @@ void VoxelHashMap::Update(const Vector3dVector &points, const Sophus::SE3d &pose
 }
 
 void VoxelHashMap::AddPoints(const std::vector<Eigen::Vector3d> &points) {
+    const double map_resolution = std::sqrt(voxel_size_ * voxel_size_ / max_points_per_voxel_);
     std::for_each(points.cbegin(), points.cend(), [&](const auto &point) {
-        auto voxel = Voxel((point / voxel_size_).template cast<int>());
+        const auto voxel = PointToVoxel(point, voxel_size_);
         auto search = map_.find(voxel);
         if (search != map_.end()) {
-            auto &voxel_block = search.value();
-            voxel_block.AddPoint(point);
+            auto &voxel_points = search.value();
+            if (voxel_points.size() == max_points_per_voxel_ ||
+                std::any_of(voxel_points.cbegin(), voxel_points.cend(),
+                            [&](const auto &voxel_point) {
+                                return (voxel_point - point).norm() < map_resolution;
+                            })) {
+                return;
+            }
+            voxel_points.emplace_back(point);
         } else {
-            map_.insert({voxel, VoxelBlock{{point}, max_points_per_voxel_}});
+            std::vector<Eigen::Vector3d> voxel_points;
+            voxel_points.reserve(max_points_per_voxel_);
+            voxel_points.emplace_back(point);
+            map_.insert({voxel, std::move(voxel_points)});
         }
     });
 }
 
 void VoxelHashMap::RemovePointsFarFromLocation(const Eigen::Vector3d &origin) {
-    for (const auto &[voxel, voxel_block] : map_) {
-        const auto &pt = voxel_block.points.front();
-        const auto max_distance2 = max_distance_ * max_distance_;
-        if ((pt - origin).squaredNorm() > (max_distance2)) {
-            map_.erase(voxel);
+    const auto max_distance2 = max_distance_ * max_distance_;
+    for (auto it = map_.begin(); it != map_.end();) {
+        const auto &[voxel, voxel_points] = *it;
+        const auto &pt = voxel_points.front();
+        if ((pt - origin).squaredNorm() >= (max_distance2)) {
+            it = map_.erase(it);
+        } else {
+            ++it;
         }
     }
 }

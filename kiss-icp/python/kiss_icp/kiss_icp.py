@@ -23,75 +23,58 @@
 import numpy as np
 
 from kiss_icp.config import KISSConfig
-from kiss_icp.deskew import get_motion_compensator
 from kiss_icp.mapping import get_voxel_hash_map
 from kiss_icp.preprocess import get_preprocessor
-from kiss_icp.registration import register_frame
+from kiss_icp.registration import get_registration
 from kiss_icp.threshold import get_threshold_estimator
 from kiss_icp.voxelization import voxel_down_sample
 
 
 class KissICP:
     def __init__(self, config: KISSConfig):
-        self.poses = []
+        self.last_pose = np.eye(4)
+        self.last_delta = np.eye(4)
         self.config = config
-        self.compensator = get_motion_compensator(config)
         self.adaptive_threshold = get_threshold_estimator(self.config)
+        self.preprocessor = get_preprocessor(self.config)
+        self.registration = get_registration(self.config)
         self.local_map = get_voxel_hash_map(self.config)
-        self.preprocess = get_preprocessor(self.config)
 
     def register_frame(self, frame, timestamps):
         # Apply motion compensation
-        frame = self.compensator.deskew_scan(frame, self.poses, timestamps)
-
-        # Preprocess the input cloud
-        frame = self.preprocess(frame)
+        frame = self.preprocessor.preprocess(frame, timestamps, self.last_delta)
 
         # Voxelize
         source, frame_downsample = self.voxelize(frame)
 
-        # Get motion prediction and adaptive_threshold
-        sigma = self.get_adaptive_threshold()
+        # Get adaptive_threshold
+        sigma = self.adaptive_threshold.get_threshold()
 
         # Compute initial_guess for ICP
-        prediction = self.get_prediction_model()
-        last_pose = self.poses[-1] if self.poses else np.eye(4)
-        initial_guess = last_pose @ prediction
+        initial_guess = self.last_pose @ self.last_delta
 
         # Run ICP
-        new_pose = register_frame(
+        new_pose = self.registration.align_points_to_map(
             points=source,
             voxel_map=self.local_map,
             initial_guess=initial_guess,
             max_correspondance_distance=3 * sigma,
-            kernel=sigma / 3,
+            kernel=sigma,
         )
 
-        self.adaptive_threshold.update_model_deviation(np.linalg.inv(initial_guess) @ new_pose)
+        # Compute the difference between the prediction and the actual estimate
+        model_deviation = np.linalg.inv(initial_guess) @ new_pose
+
+        # Update step: threshold, local map, delta, and the last pose
+        self.adaptive_threshold.update_model_deviation(model_deviation)
         self.local_map.update(frame_downsample, new_pose)
-        self.poses.append(new_pose)
+        self.last_delta = np.linalg.inv(self.last_pose) @ new_pose
+        self.last_pose = new_pose
+
+        # Return the (deskew) input raw scan (frame) and the points used for registration (source)
         return frame, source
 
     def voxelize(self, iframe):
         frame_downsample = voxel_down_sample(iframe, self.config.mapping.voxel_size * 0.5)
         source = voxel_down_sample(frame_downsample, self.config.mapping.voxel_size * 1.5)
         return source, frame_downsample
-
-    def get_adaptive_threshold(self):
-        return (
-            self.config.adaptive_threshold.initial_threshold
-            if not self.has_moved()
-            else self.adaptive_threshold.get_threshold()
-        )
-
-    def get_prediction_model(self):
-        if len(self.poses) < 2:
-            return np.eye(4)
-        return np.linalg.inv(self.poses[-2]) @ self.poses[-1]
-
-    def has_moved(self):
-        if len(self.poses) < 1:
-            return False
-        compute_motion = lambda T1, T2: np.linalg.norm((np.linalg.inv(T1) @ T2)[:3, -1])
-        motion = compute_motion(self.poses[0], self.poses[-1])
-        return motion > 5 * self.config.adaptive_threshold.min_motion_th

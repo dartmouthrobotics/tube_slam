@@ -23,13 +23,22 @@
 #include "Registration.hpp"
 
 #include <tbb/blocked_range.h>
+#include <tbb/concurrent_vector.h>
+#include <tbb/global_control.h>
+#include <tbb/info.h>
+#include <tbb/parallel_for.h>
 #include <tbb/parallel_reduce.h>
+#include <tbb/task_arena.h>
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 #include <sophus/se3.hpp>
 #include <sophus/so3.hpp>
 #include <tuple>
+
+#include "VoxelHashMap.hpp"
+#include "VoxelUtils.hpp"
 
 namespace Eigen {
 using Matrix6d = Eigen::Matrix<double, 6, 6>;
@@ -37,79 +46,100 @@ using Matrix3_6d = Eigen::Matrix<double, 3, 6>;
 using Vector6d = Eigen::Matrix<double, 6, 1>;
 }  // namespace Eigen
 
+using Correspondences = tbb::concurrent_vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>;
+using LinearSystem = std::pair<Eigen::Matrix6d, Eigen::Vector6d>;
+
 namespace {
-
 inline double square(double x) { return x * x; }
-
-struct ResultTuple {
-    ResultTuple() {
-        JTJ.setZero();
-        JTr.setZero();
-    }
-
-    ResultTuple operator+(const ResultTuple &other) {
-        this->JTJ += other.JTJ;
-        this->JTr += other.JTr;
-        return *this;
-    }
-
-    Eigen::Matrix6d JTJ;
-    Eigen::Vector6d JTr;
-};
 
 void TransformPoints(const Sophus::SE3d &T, std::vector<Eigen::Vector3d> &points) {
     std::transform(points.cbegin(), points.cend(), points.begin(),
                    [&](const auto &point) { return T * point; });
 }
 
-constexpr int MAX_NUM_ITERATIONS_ = 500;
-constexpr double ESTIMATION_THRESHOLD_ = 0.0001;
+Correspondences DataAssociation(const std::vector<Eigen::Vector3d> &points,
+                                const kiss_icp::VoxelHashMap &voxel_map,
+                                const double max_correspondance_distance) {
+    using points_iterator = std::vector<Eigen::Vector3d>::const_iterator;
+    Correspondences correspondences;
+    correspondences.reserve(points.size());
+    tbb::parallel_for(
+        // Range
+        tbb::blocked_range<points_iterator>{points.cbegin(), points.cend()},
+        [&](const tbb::blocked_range<points_iterator> &r) {
+            std::for_each(r.begin(), r.end(), [&](const auto &point) {
+                const auto &[closest_neighbor, distance] = voxel_map.GetClosestNeighbor(point);
+                if (distance < max_correspondance_distance) {
+                    correspondences.emplace_back(point, closest_neighbor);
+                }
+            });
+        });
+    return correspondences;
+}
 
-std::tuple<Eigen::Matrix6d, Eigen::Vector6d> BuildLinearSystem(
-    const std::vector<Eigen::Vector3d> &source,
-    const std::vector<Eigen::Vector3d> &target,
-    double kernel) {
-    auto compute_jacobian_and_residual = [&](auto i) {
-        const Eigen::Vector3d residual = source[i] - target[i];
+LinearSystem BuildLinearSystem(const Correspondences &correspondences, const double kernel_scale) {
+    auto compute_jacobian_and_residual = [](const auto &correspondence) {
+        const auto &[source, target] = correspondence;
+        const Eigen::Vector3d residual = source - target;
         Eigen::Matrix3_6d J_r;
         J_r.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity();
-        J_r.block<3, 3>(0, 3) = -1.0 * Sophus::SO3d::hat(source[i]);
+        J_r.block<3, 3>(0, 3) = -1.0 * Sophus::SO3d::hat(source);
         return std::make_tuple(J_r, residual);
     };
 
+    auto sum_linear_systems = [](LinearSystem a, const LinearSystem &b) {
+        a.first += b.first;
+        a.second += b.second;
+        return a;
+    };
+
+    auto GM_weight = [&](const double &residual2) {
+        return square(kernel_scale) / square(kernel_scale + residual2);
+    };
+
+    using correspondence_iterator = Correspondences::const_iterator;
     const auto &[JTJ, JTr] = tbb::parallel_reduce(
         // Range
-        tbb::blocked_range<size_t>{0, source.size()},
+        tbb::blocked_range<correspondence_iterator>{correspondences.cbegin(),
+                                                    correspondences.cend()},
         // Identity
-        ResultTuple(),
+        LinearSystem(Eigen::Matrix6d::Zero(), Eigen::Vector6d::Zero()),
         // 1st Lambda: Parallel computation
-        [&](const tbb::blocked_range<size_t> &r, ResultTuple J) -> ResultTuple {
-            auto Weight = [&](double residual2) {
-                return square(kernel) / square(kernel + residual2);
-            };
-            auto &[JTJ_private, JTr_private] = J;
-            for (auto i = r.begin(); i < r.end(); ++i) {
-                const auto &[J_r, residual] = compute_jacobian_and_residual(i);
-                const double w = Weight(residual.squaredNorm());
-                JTJ_private.noalias() += J_r.transpose() * w * J_r;
-                JTr_private.noalias() += J_r.transpose() * w * residual;
-            }
-            return J;
+        [&](const tbb::blocked_range<correspondence_iterator> &r, LinearSystem J) -> LinearSystem {
+            return std::transform_reduce(
+                r.begin(), r.end(), J, sum_linear_systems, [&](const auto &correspondence) {
+                    const auto &[J_r, residual] = compute_jacobian_and_residual(correspondence);
+                    const double w = GM_weight(residual.squaredNorm());
+                    return LinearSystem(J_r.transpose() * w * J_r,        // JTJ
+                                        J_r.transpose() * w * residual);  // JTr
+                });
         },
         // 2nd Lambda: Parallel reduction of the private Jacboians
-        [&](ResultTuple a, const ResultTuple &b) -> ResultTuple { return a + b; });
+        sum_linear_systems);
 
-    return std::make_tuple(JTJ, JTr);
+    return {JTJ, JTr};
 }
 }  // namespace
 
 namespace kiss_icp {
 
-Sophus::SE3d RegisterFrame(const std::vector<Eigen::Vector3d> &frame,
-                           const VoxelHashMap &voxel_map,
-                           const Sophus::SE3d &initial_guess,
-                           double max_correspondence_distance,
-                           double kernel) {
+Registration::Registration(int max_num_iteration, double convergence_criterion, int max_num_threads)
+    : max_num_iterations_(max_num_iteration),
+      convergence_criterion_(convergence_criterion),
+      // Only manipulate the number of threads if the user specifies something greater than 0
+      max_num_threads_(max_num_threads > 0 ? max_num_threads
+                                           : tbb::this_task_arena::max_concurrency()) {
+    // This global variable requires static duration storage to be able to manipulate the max
+    // concurrency from TBB across the entire class
+    static const auto tbb_control_settings = tbb::global_control(
+        tbb::global_control::max_allowed_parallelism, static_cast<size_t>(max_num_threads_));
+}
+
+Sophus::SE3d Registration::AlignPointsToMap(const std::vector<Eigen::Vector3d> &frame,
+                                            const VoxelHashMap &voxel_map,
+                                            const Sophus::SE3d &initial_guess,
+                                            const double max_distance,
+                                            const double kernel_scale) {
     if (voxel_map.Empty()) return initial_guess;
 
     // Equation (9)
@@ -118,11 +148,11 @@ Sophus::SE3d RegisterFrame(const std::vector<Eigen::Vector3d> &frame,
 
     // ICP-loop
     Sophus::SE3d T_icp = Sophus::SE3d();
-    for (int j = 0; j < MAX_NUM_ITERATIONS_; ++j) {
+    for (int j = 0; j < max_num_iterations_; ++j) {
         // Equation (10)
-        const auto &[src, tgt] = voxel_map.GetCorrespondences(source, max_correspondence_distance);
+        const auto correspondences = DataAssociation(source, voxel_map, max_distance);
         // Equation (11)
-        const auto &[JTJ, JTr] = BuildLinearSystem(src, tgt, kernel);
+        const auto &[JTJ, JTr] = BuildLinearSystem(correspondences, kernel_scale);
         const Eigen::Vector6d dx = JTJ.ldlt().solve(-JTr);
         const Sophus::SE3d estimation = Sophus::SE3d::exp(dx);
         // Equation (12)
@@ -130,7 +160,7 @@ Sophus::SE3d RegisterFrame(const std::vector<Eigen::Vector3d> &frame,
         // Update iterations
         T_icp = estimation * T_icp;
         // Termination criteria
-        if (dx.norm() < ESTIMATION_THRESHOLD_) break;
+        if (dx.norm() < convergence_criterion_) break;
     }
     // Spit the final transformation
     return T_icp * initial_guess;
