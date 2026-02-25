@@ -106,7 +106,7 @@ Visualization Manager:
           Axis: Z
           Channel Name: intensity
           Class: rviz_default_plugins/PointCloud2
-          Color: 102; 102; 102
+          Color: 255; 255; 255
           Color Transformer: FlatColor
           Decay Time: 0
           Enabled: true
@@ -118,7 +118,7 @@ Visualization Manager:
           Name: local_map
           Position Transformer: XYZ
           Selectable: true
-          Size (Pixels): 1.2
+          Size (Pixels): 1.0
           Size (m): 0.009999999776482582
           Style: Points
           Topic:
@@ -131,6 +131,7 @@ Visualization Manager:
           Use Fixed Frame: true
           Use rainbow: true
           Value: true
+        - Alpha: 0.3
       Enabled: true
       Name: point_clouds
     - Angle Tolerance: 0.10000000149011612
