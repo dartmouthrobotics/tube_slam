@@ -50,7 +50,6 @@ sonar_ws/src/
 | `ros/src/MapSaverNode.cpp` | **Added** | Subscribes to `/kiss/frame` and `/kiss/odometry`, accumulates a global point cloud map, saves `global_map.pcd`, `local_map.pcd`, and `trajectory_tum.txt` on shutdown (Ctrl+C). No PCL dependency. |
 | `ros/config/sonar_config.yaml` | **Added** | Tuned for Water Linked 3D-15: `max_range: 10.0`, `min_range: 0.3`, `voxel_size: 0.10`, `deskew: false`, `min_motion_th: 0.05` |
 | `ros/launch/sonar_slam.launch.py` | **Added** | All-in-one launch: KISS-ICP + SimpleLoopClosure + MapSaver + RViz + bag playback. Supports `use_loop_closure:=true/false` |
-| `ros/rviz/sonar_kiss_icp.rviz` | **Added** | Custom rviz config: local map pixel size 1.2, color (246, 245, 244), fixed frame `odom` |
 | `ros/CMakeLists.txt` | **Modified** | Added `map_saver_node` target, `find_package(Eigen3)`, `cmake_policy(SET CMP0144 NEW)` |
 | `ros/package.xml` | **Modified** | Added `pcl_conversions` dependency |
 
