@@ -22,6 +22,7 @@
 // SOFTWARE.
 #include <Eigen/Core>
 #include <memory>
+#include <mutex>  
 #include <sophus/se3.hpp>
 #include <utility>
 #include <vector>
@@ -49,6 +50,15 @@
 #include <tf2_ros/transform_broadcaster.hpp>
 
 namespace {
+
+// convert geometry_msgs::Pose to Sophus::SE3d
+Sophus::SE3d PoseToSophus(const geometry_msgs::msg::Pose &pose) {
+    Eigen::Quaterniond q(pose.orientation.w, pose.orientation.x,
+                         pose.orientation.y, pose.orientation.z);
+    Eigen::Vector3d t(pose.position.x, pose.position.y, pose.position.z);
+    return Sophus::SE3d(q, t);
+}
+
 Sophus::SE3d LookupTransform(const std::string &target_frame,
                              const std::string &source_frame,
                              const std::unique_ptr<tf2_ros::Buffer> &tf2_buffer) {
@@ -63,7 +73,6 @@ Sophus::SE3d LookupTransform(const std::string &target_frame,
     }
     RCLCPP_WARN(rclcpp::get_logger("LookupTransform"), "Failed to find tf. Reason=%s",
                 err_msg.c_str());
-    // default construction is the identity
     return Sophus::SE3d();
 }
 }  // namespace
@@ -86,6 +95,24 @@ OdometryServer::OdometryServer(const rclcpp::NodeOptions &options)
     pointcloud_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
         "pointcloud_topic", rclcpp::SensorDataQoS(),
         std::bind(&OdometryServer::RegisterFrame, this, std::placeholders::_1));
+
+    // subscribe to external VIO odometry 
+    if (use_external_odom_) {
+        std::string external_odom_topic =
+            declare_parameter<std::string>("external_odom_topic", "/okvis/odometry");
+        RCLCPP_INFO(this->get_logger(),
+                    "\tExternal odometry topic: %s", external_odom_topic.c_str());
+
+        external_odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+            external_odom_topic, rclcpp::SensorDataQoS(),
+            [this](const nav_msgs::msg::Odometry::ConstSharedPtr &msg) {
+                std::lock_guard<std::mutex> lock(odom_mutex_);
+                latest_external_odom_ = msg;
+            });
+        RCLCPP_INFO(this->get_logger(),
+                    "LOOSE COUPLING enabled: using '%s' as initial guess",
+                    external_odom_topic.c_str());
+    }
 
     // Initialize publishers
     rclcpp::QoS qos((rclcpp::SystemDefaultsQoS().keep_last(1).durability_volatile()));
@@ -127,6 +154,10 @@ void OdometryServer::initializeParameters(kiss_icp::pipeline::KISSConfig &config
     orientation_covariance_ = declare_parameter<double>("orientation_covariance", 0.1);
     RCLCPP_INFO(this->get_logger(), "\tOrientation covariance: %.2f", orientation_covariance_);
 
+    // parameter to enable external odometry
+    use_external_odom_ = declare_parameter<bool>("use_external_odom", false);
+    RCLCPP_INFO(this->get_logger(), "\tUse external odometry: %d", use_external_odom_);
+
     config.max_range = declare_parameter<double>("data.max_range", config.max_range);
     RCLCPP_INFO(this->get_logger(), "\tMax range: %.2f", config.max_range);
     config.min_range = declare_parameter<double>("data.min_range", config.min_range);
@@ -165,6 +196,42 @@ void OdometryServer::RegisterFrame(const sensor_msgs::msg::PointCloud2::ConstSha
     const auto points = PointCloud2ToEigen(msg);
     const auto timestamps = GetTimestamps(msg);
 
+    // =========================================================================
+    // LOOSE COUPLING: Override KISS-ICP's constant velocity model with SVIn VIO
+    //
+    //   1. KISS-ICP computes: initial_guess = last_pose_ * last_delta_
+    //   2. last_delta_ is the previous frame-to-frame ICP result
+    //   3. replace last_delta_ with SVIn's inter-frame VIO motion
+    //   4. ICP refines this SVIn-informed guess against the sonar voxel map
+    //   5. After RegisterFrame, KISS-ICP overwrites last_delta_ with its own
+    //      ICP result
+    // =========================================================================
+    if (use_external_odom_) {
+        std::lock_guard<std::mutex> lock(odom_mutex_);
+        if (latest_external_odom_) {
+            const Sophus::SE3d current_external_pose =
+                PoseToSophus(latest_external_odom_->pose.pose);
+
+            if (has_external_odom_) {
+                // delta = prev^{-1} * current - relative motion from SVIn VIO
+                const Sophus::SE3d external_delta =
+                    prev_external_pose_.inverse() * current_external_pose;
+
+                // Inject into KISS-ICP: replaces constant velocity prediction
+                kiss_icp_->delta() = external_delta;
+
+                RCLCPP_DEBUG(this->get_logger(),
+                             "LOOSE COUPLING: SVIn delta t=[%.3f, %.3f, %.3f]",
+                             external_delta.translation().x(),
+                             external_delta.translation().y(),
+                             external_delta.translation().z());
+            }
+
+            prev_external_pose_ = current_external_pose;
+            has_external_odom_ = true;
+        }
+    }
+
     // Register frame, main entry point to KISS-ICP pipeline
     const auto &[frame, keypoints] = kiss_icp_->RegisterFrame(points, timestamps);
 
@@ -173,7 +240,6 @@ void OdometryServer::RegisterFrame(const sensor_msgs::msg::PointCloud2::ConstSha
 
     // Spit the current estimated pose to ROS msgs handling the desired target frame
     PublishOdometry(kiss_pose, msg->header);
-    // Publishing these clouds is a bit costly, so do it only if we are debugging
     if (publish_debug_clouds_) {
         PublishClouds(frame, keypoints, msg->header);
     }
@@ -181,7 +247,6 @@ void OdometryServer::RegisterFrame(const sensor_msgs::msg::PointCloud2::ConstSha
 
 void OdometryServer::PublishOdometry(const Sophus::SE3d &kiss_pose,
                                      const std_msgs::msg::Header &header) {
-    // If necessary, transform the ego-centric pose to the specified base_link/base_footprint frame
     const auto cloud_frame_id = header.frame_id;
     const auto egocentric_estimation = (base_frame_.empty() || base_frame_ == cloud_frame_id);
     const auto moving_frame = egocentric_estimation ? cloud_frame_id : base_frame_;
@@ -239,8 +304,14 @@ void OdometryServer::ResetService(
     [[maybe_unused]] std::shared_ptr<std_srvs::srv::Empty::Response> response) {
     RCLCPP_INFO(this->get_logger(), "Resetting KISS-ICP map and odometry");
 
-    // Reset the KISS-ICP pipeline
     kiss_icp_->Reset();
+
+    // LOOSE COUPLING: Reset external odom state
+    has_external_odom_ = false;
+    {
+        std::lock_guard<std::mutex> lock(odom_mutex_);
+        latest_external_odom_ = nullptr;
+    }
 
     RCLCPP_INFO(this->get_logger(), "KISS-ICP reset completed successfully");
 }

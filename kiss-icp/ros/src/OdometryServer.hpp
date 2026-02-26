@@ -22,6 +22,12 @@
 // SOFTWARE.
 #pragma once
 
+#include <Eigen/Core>
+#include <memory>
+#include <mutex>  
+#include <string>
+#include <vector>
+
 // KISS-ICP
 #include "kiss_icp/pipeline/KissICP.hpp"
 
@@ -40,59 +46,57 @@ namespace kiss_icp_ros {
 
 class OdometryServer : public rclcpp::Node {
 public:
-    /// OdometryServer constructor
-    OdometryServer() = delete;
     explicit OdometryServer(const rclcpp::NodeOptions &options);
 
 private:
-    /// Declare ROS parameters and set the associated variables (in this class and in the provided
-    /// config object)
-    void initializeParameters(kiss_icp::pipeline::KISSConfig &config);
-
-    /// Register new frame
     void RegisterFrame(const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg);
-
-    /// Stream the estimated pose to ROS
     void PublishOdometry(const Sophus::SE3d &kiss_pose, const std_msgs::msg::Header &header);
-
-    /// Stream the debugging point clouds for visualization (if required)
     void PublishClouds(const std::vector<Eigen::Vector3d> &frame,
                        const std::vector<Eigen::Vector3d> &keypoints,
                        const std_msgs::msg::Header &header);
+    void initializeParameters(kiss_icp::pipeline::KISSConfig &config);
     void ResetService(const std::shared_ptr<std_srvs::srv::Empty::Request> request,
                       std::shared_ptr<std_srvs::srv::Empty::Response> response);
 
 private:
-    /// Tools for broadcasting TFs.
-    std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
-    std::unique_ptr<tf2_ros::Buffer> tf2_buffer_;
-    std::unique_ptr<tf2_ros::TransformListener> tf2_listener_;
-    bool invert_odom_tf_;
-    bool publish_odom_tf_;
-    bool publish_debug_clouds_;
+    // KISS-ICP
+    std::unique_ptr<kiss_icp::pipeline::KissICP> kiss_icp_;
 
-    /// Data subscribers.
+    // Subscribers
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_sub_;
 
-    /// Data publishers.
+    // Publishers
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr frame_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr kpoints_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr map_publisher_;
 
-    /// Service servers.
+    // TF
+    std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+    std::unique_ptr<tf2_ros::Buffer> tf2_buffer_;
+    std::unique_ptr<tf2_ros::TransformListener> tf2_listener_;
+
+    // Services
     rclcpp::Service<std_srvs::srv::Empty>::SharedPtr reset_service_;
 
-    /// KISS-ICP
-    std::unique_ptr<kiss_icp::pipeline::KissICP> kiss_icp_;
-
-    /// Global/map coordinate frame.
-    std::string lidar_odom_frame_{"odom_lidar"};
+    // Parameters
     std::string base_frame_{};
+    std::string lidar_odom_frame_{"odom"};
+    bool publish_odom_tf_{true};
+    bool invert_odom_tf_{false};
+    bool publish_debug_clouds_{false};
+    double position_covariance_{0.1};
+    double orientation_covariance_{0.1};
 
-    /// Covariance diagonal
-    double position_covariance_;
-    double orientation_covariance_;
+    // =========================================
+    // LOOSE COUPLING: SVIn external odometry
+    // =========================================
+    bool use_external_odom_{false};
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr external_odom_sub_;
+    std::mutex odom_mutex_;
+    nav_msgs::msg::Odometry::ConstSharedPtr latest_external_odom_;
+    Sophus::SE3d prev_external_pose_;
+    bool has_external_odom_{false};
 };
 
 }  // namespace kiss_icp_ros

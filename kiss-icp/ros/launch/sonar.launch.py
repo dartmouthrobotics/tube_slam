@@ -1,3 +1,28 @@
+"""
+KISS-ICP Sonar Launch with SVIn Loose Coupling
+
+When use_external_odom is True, KISS-ICP subscribes to SVIn's VIO odometry
+and uses it as the initial guess for ICP registration instead of the
+constant velocity model. Loop closure still runs on sonar point clouds
+
+Usage:
+  # Without SVIn loose coupling 
+  ros2 launch kiss_icp sonar.launch.py
+
+  # With SVIn loose coupling:
+  ros2 launch kiss_icp sonar.launch.py use_external_odom:=true
+
+Set the bag file and generated graph path:
+    
+    bagfile = LaunchConfiguration("bagfile",
+        default="add bag file path here")
+    
+    parameters=[{
+        "use_sim_time": use_sim_time,
+        "save_directory": "add bag file path here",
+    }],
+"""
+
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -30,12 +55,20 @@ def generate_launch_description():
     rate = LaunchConfiguration("rate", default="1.0")
     config_file = LaunchConfiguration("config_file", default=kiss_icp_config)
 
+    # LOOSE COUPLING parameters
+    use_external_odom = LaunchConfiguration("use_external_odom", default="false")
+    external_odom_topic = LaunchConfiguration("external_odom_topic", default="/okvis/odometry")
+
     return LaunchDescription([
         DeclareLaunchArgument("bagfile", default_value=bagfile),
         DeclareLaunchArgument("rate", default_value="1.0"),
         DeclareLaunchArgument("visualize", default_value="true"),
         DeclareLaunchArgument("use_loop_closure", default_value="true"),
         DeclareLaunchArgument("config_file", default_value=kiss_icp_config),
+        DeclareLaunchArgument("use_external_odom", default_value="false",
+                              description="Use SVIn VIO as initial guess for ICP"),
+        DeclareLaunchArgument("external_odom_topic", default_value="/okvis/odometry",
+                              description="External odometry topic from SVIn"),
 
         # ---- KISS-ICP Odometry ----
         Node(
@@ -56,6 +89,8 @@ def generate_launch_description():
                     "use_sim_time": use_sim_time,
                     "position_covariance": 0.1,
                     "orientation_covariance": 0.1,
+                    "use_external_odom": use_external_odom,
+                    "external_odom_topic": external_odom_topic,
                 },
                 config_file,
             ],
