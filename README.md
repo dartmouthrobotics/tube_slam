@@ -76,7 +76,7 @@ source install/setup.bash
 
 ## Usage
 
-### All-in-one: SVIn + KISS-ICP + Loop Closure
+### SVIn + KISS-ICP + Loop Closure
 
 
 
