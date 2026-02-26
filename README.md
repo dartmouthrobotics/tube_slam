@@ -1,4 +1,4 @@
-# Underwater Sonar SLAM with Visual-Inertial Loose Coupling
+# SVIn with KISS-ICP sonar odometry
 
 ROS2 workspace for underwater SLAM combining SVIn with KISS-ICP sonar odometry through loose coupling, plus ICP-based loop closure
 
