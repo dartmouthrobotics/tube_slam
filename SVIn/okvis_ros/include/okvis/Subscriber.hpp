@@ -129,7 +129,11 @@ class Subscriber {
   void depthCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
 
   /// @brief The DVL callback. @CMB
-  void dvlCallback(const waterlinked_a50_ros_driver::msg::DVL::SharedPtr msg);
+  // void dvlCallback(const waterlinked_a50_ros_driver::msg::DVL::SharedPtr msg);
+  void dvlCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
+
+  /// @brief The 3D Sonar Odometry callback. @CMB
+  void sonar3dOdomCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
 
   /// @brief The Relocalization callback. @Sharmin
   void relocCallback(const sensor_msgs::msg::PointCloud::SharedPtr points_msg);
@@ -147,7 +151,8 @@ class Subscriber {
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr subImu_;  ///< The IMU message subscriber.
   // ros::Subscriber subSonarRange_;                                ///< The Sonar Range Subscriber @Sharmin
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr subDepth_; ///< The Depth Subscriber @CMB
-  rclcpp::Subscription<waterlinked_a50_ros_driver::msg::DVL>::SharedPtr subDVL_; ///< The DVL Subscriber @CMB
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr subDVL_; ///< The DVL Subscriber @CMB
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub3DSonarOdom_; ///< The 3D Sonar Odometry Subscriber @CMB
   rclcpp::Subscription<sensor_msgs::msg::PointCloud>::SharedPtr
       subReloPoints_;        ///< The Relocalization Points Subscriber from pose_graph @Sharmin
   cv::Ptr<cv::CLAHE> clahe;  /// Sharmin

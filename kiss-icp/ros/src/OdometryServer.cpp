@@ -197,9 +197,9 @@ void OdometryServer::RegisterFrame(const sensor_msgs::msg::PointCloud2::ConstSha
     const auto timestamps = GetTimestamps(msg);
 
     // =========================================================================
-    // LOOSE COUPLING: Override KISS-ICP's constant velocity model with SVIn VIO
+    // override KISS-ICP's constant velocity model with SVIn VIO
     //
-    //   1. KISS-ICP computes: initial_guess = last_pose_ * last_delta_
+    //   1. KISS-ICP: initial_guess = last_pose_ * last_delta_
     //   2. last_delta_ is the previous frame-to-frame ICP result
     //   3. replace last_delta_ with SVIn's inter-frame VIO motion
     //   4. ICP refines this SVIn-informed guess against the sonar voxel map
@@ -217,14 +217,26 @@ void OdometryServer::RegisterFrame(const sensor_msgs::msg::PointCloud2::ConstSha
                 const Sophus::SE3d external_delta =
                     prev_external_pose_.inverse() * current_external_pose;
 
-                // Inject into KISS-ICP: replaces constant velocity prediction
-                kiss_icp_->delta() = external_delta;
+                // replaces constant velocity prediction
+                static const Sophus::SE3d T_cam_to_sonar = [] {
+                    Eigen::Matrix4d m;
+                    m <<  0.102787807, -0.122974224,  0.987072443, -0.009292291,
+                        0.990790350,  0.100589907, -0.090642994, -0.024991601,
+                        -0.088142773,  0.987298846,  0.132181090,  0.103210315,
+                        0.0,           0.0,           0.0,           1.0;
+                    Eigen::Quaterniond q(m.block<3,3>(0,0));
+                    q.normalize();
+                    return Sophus::SE3d(q, m.block<3,1>(0,3));
+                }();
+
+                kiss_icp_->delta() = T_cam_to_sonar * external_delta * T_cam_to_sonar.inverse();
 
                 RCLCPP_DEBUG(this->get_logger(),
                              "LOOSE COUPLING: SVIn delta t=[%.3f, %.3f, %.3f]",
                              external_delta.translation().x(),
                              external_delta.translation().y(),
                              external_delta.translation().z());
+
             }
 
             prev_external_pose_ = current_external_pose;
@@ -232,13 +244,12 @@ void OdometryServer::RegisterFrame(const sensor_msgs::msg::PointCloud2::ConstSha
         }
     }
 
-    // Register frame, main entry point to KISS-ICP pipeline
     const auto &[frame, keypoints] = kiss_icp_->RegisterFrame(points, timestamps);
 
-    // Extract the last KISS-ICP pose, ego-centric to the LiDAR
+    // extract the last KISS-ICP pose
     const Sophus::SE3d kiss_pose = kiss_icp_->pose();
 
-    // Spit the current estimated pose to ROS msgs handling the desired target frame
+    // spit the current estimated pose to ROS msgs handling the desired target frame
     PublishOdometry(kiss_pose, msg->header);
     if (publish_debug_clouds_) {
         PublishClouds(frame, keypoints, msg->header);
@@ -256,7 +267,7 @@ void OdometryServer::PublishOdometry(const Sophus::SE3d &kiss_pose,
         return cloud2base * kiss_pose * cloud2base.inverse();
     }();
 
-    // Broadcast the tf ---
+    // broadcast the tf ---
     if (publish_odom_tf_) {
         geometry_msgs::msg::TransformStamped transform_msg;
         transform_msg.header.stamp = header.stamp;
@@ -306,7 +317,7 @@ void OdometryServer::ResetService(
 
     kiss_icp_->Reset();
 
-    // LOOSE COUPLING: Reset external odom state
+    // reset external odom state
     has_external_odom_ = false;
     {
         std::lock_guard<std::mutex> lock(odom_mutex_);

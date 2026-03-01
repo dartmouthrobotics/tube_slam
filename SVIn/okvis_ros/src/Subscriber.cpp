@@ -97,9 +97,17 @@ Subscriber::Subscriber(std::shared_ptr<rclcpp::Node> node,
 
   // DVL callback (remapped dvl topic to /dvl)
   if (vioParameters_.sensorList.isDVLUsed){
-    subDVL_ = node_->create_subscription<waterlinked_a50_ros_driver::msg::DVL>(
-        "dvl", rclcpp::SensorDataQoS(), 
+    subDVL_ = node_->create_subscription<nav_msgs::msg::Odometry>(
+        "dvl_vel", rclcpp::SensorDataQoS(), 
         std::bind(&Subscriber::dvlCallback, this, std::placeholders::_1), 
+        options);
+  }
+
+  // 3D Sonar Odometry callback  @CMB
+  if (vioParameters_.sensorList.is3DSonarOdomUsed){
+    sub3DSonarOdom_ = node_->create_subscription<nav_msgs::msg::Odometry>(
+        "sonar3dOdom", rclcpp::QoS(10),
+        std::bind(&Subscriber::sonar3dOdomCallback, this, std::placeholders::_1),
         options);
   }
 
@@ -244,8 +252,10 @@ void Subscriber::depthCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
       msg->pose.pose.position.z);
 }
 
+
 // DVL subscriber callback
-void Subscriber::dvlCallback(const waterlinked_a50_ros_driver::msg::DVL::SharedPtr msg)
+// void Subscriber::dvlCallback(const waterlinked_a50_ros_driver::msg::DVL::SharedPtr msg)
+void Subscriber::dvlCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
 {
   // RCLCPP_INFO(node_->get_logger(), 
   //             "DVL Velocity: [%.3f, %.3f, %.3f] m/s", 
@@ -253,9 +263,40 @@ void Subscriber::dvlCallback(const waterlinked_a50_ros_driver::msg::DVL::SharedP
   
   vioInterface_->addDVLMeasurement(
       okvis::Time(msg->header.stamp.sec, msg->header.stamp.nanosec),
-      Eigen::Vector3d(msg->velocity.x, msg->velocity.y, msg->velocity.z),
-      msg->velocity_valid);
+      Eigen::Vector3d(msg->twist.twist.linear.x, msg->twist.twist.linear.y, msg->twist.twist.linear.z),
+      Eigen::Vector3d(msg->twist.covariance[0], msg->twist.covariance[7], msg->twist.covariance[14]));  // Assuming covariance is in row-major order
 } 
+
+// 3D Sonar Odometry subscriber callback  @CMB
+void Subscriber::sonar3dOdomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
+{
+  const Eigen::Quaterniond orientation(
+      msg->pose.pose.orientation.w,
+      msg->pose.pose.orientation.x,
+      msg->pose.pose.orientation.y,
+      msg->pose.pose.orientation.z);
+  const Eigen::Vector3d position(
+      msg->pose.pose.position.x,
+      msg->pose.pose.position.y,
+      msg->pose.pose.position.z);
+  Eigen::Matrix<double, 6, 6> covariance;
+  for (int r = 0; r < 6; ++r)
+    for (int c = 0; c < 6; ++c)
+      covariance(r, c) = msg->pose.covariance[r * 6 + c];
+
+  LOG(INFO) << std::setprecision(3) << std::fixed
+           << "Received 3D Sonar Odometry - Position: [" << position.transpose() << "] m, "
+           << "Orientation (quaternion): [" << orientation.coeffs().transpose() << "], "
+           << "Covariance (position [m^2], orientation [rad^2]): ["
+           << covariance.block<3, 3>(0, 0).diagonal().transpose() << ", "
+           << covariance.block<3, 3>(3, 3).diagonal().transpose() << "]";  
+
+  vioInterface_->add3DSonarOdomMeasurement(
+      okvis::Time(msg->header.stamp.sec, msg->header.stamp.nanosec),
+      orientation,
+      position,
+      covariance);
+}
 
 // Watchdog tick: freeze when both IMU and camera inactive longer than threshold
 void Subscriber::watchdogTick() {

@@ -107,7 +107,7 @@ struct DepthCameraData {
 };
 
 /// @Sharmin
-/// \brief Sonar point measurement.
+/// \brief Pipe Sonar point measurement.
 struct SonarReading {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   double range;    ///< range measurement
@@ -125,6 +125,7 @@ struct DepthReading {
 struct DVLReading {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   Eigen::Vector3d velocity;  ///< velocity measurement in body frame (in m/s)
+  Eigen::Vector3d covariance;  ///< covariance of the velocity measurement (in m/s^2)
   double fom;               ///< figure of merit (quality of the measurement)
   double altitude;         ///< altitude measurement (in meter)
   bool velocity_valid; ///< validity of velocity measurement
@@ -160,6 +161,17 @@ struct DVLReading {
   // bool validBeam4;  ///< validity of beam 4
 
 };
+
+/// \brief 3D Sonar Odometry measurement.
+/// Covariance follows nav_msgs/Odometry convention:
+/// 6x6 matrix [x,y,z, roll, pitch, yaw]
+struct ThreeDSonarOdomReading{
+  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+  Eigen::Quaterniond orientation; ///< Orientation quaternion (qx, qy, qz, qw)
+  Eigen::Vector3d position; ///< Position measurement [m]
+  Eigen::Matrix<double, 6,6> covariance; ///< Pose covariance [x,y,z,rx,ry,rz] 6x6
+};
+
 struct RelocReading {
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   std::vector<Eigen::Vector3d>
@@ -244,6 +256,9 @@ typedef std::deque<SonarMeasurement, Eigen::aligned_allocator<SonarMeasurement> 
 
 typedef Measurement<DVLReading> DVLMeasurement;                                                       /// @CMB
 typedef std::deque<DVLMeasurement, Eigen::aligned_allocator<DVLMeasurement> > DVLMeasurementDeque;  /// @CMB
+
+typedef Measurement<ThreeDSonarOdomReading> ThreeDSonarOdomMeasurement;                                                       /// @CMB
+typedef std::deque<ThreeDSonarOdomMeasurement, Eigen::aligned_allocator<ThreeDSonarOdomMeasurement> > ThreeDSonarOdomMeasurementDeque;  /// @CMB
 
 typedef Measurement<PositionReading> PositionMeasurement;
 typedef std::deque<PositionMeasurement, Eigen::aligned_allocator<PositionMeasurement> > PositionMeasurementDeque;

@@ -31,13 +31,13 @@
  *********************************************************************************/
 
 /**
- * @file DepthError.hpp
- * @brief Header file for the DepthError class.
- * @author Sharmin Rahman
+ * @file DvlError.hpp
+ * @brief Header file for the DvlError class.
+ * @author Chinmay Burgul
  */
 
-#ifndef INCLUDE_OKVIS_CERES_DEPTHERROR_HPP_
-#define INCLUDE_OKVIS_CERES_DEPTHERROR_HPP_
+#ifndef INCLUDE_OKVIS_CERES_DVLERROR_HPP_
+#define INCLUDE_OKVIS_CERES_DVLERROR_HPP_
 
 #include <okvis/assert_macros.hpp>
 #include <okvis/ceres/ErrorInterface.hpp>
@@ -52,58 +52,61 @@ namespace okvis {
 /// \brief ceres Namespace for ceres-related functionality implemented in okvis.
 namespace ceres {
 
-/// \brief Absolute error of a depth measurement.
-class DepthError : public ::ceres::SizedCostFunction<1 /* number of residuals */, 7 /* size of first parameter */>,
+/// \brief Absolute error of a DVL measurement.
+class DvlError : public ::ceres::SizedCostFunction<3 /* number of residuals */, 7 /* size of first parameter */, 9 /* size of second parameter */>,
                    public ErrorInterface {
  public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   OKVIS_DEFINE_EXCEPTION(Exception, std::runtime_error)
 
   /// \brief The base class type.
-  typedef ::ceres::SizedCostFunction<1, 7> base_t;
+  typedef ::ceres::SizedCostFunction<3, 7, 9> base_t;
 
   /// \brief Number of residuals (3)
-  static const int kNumResiduals = 1;
+  static const int kNumResiduals = 3;
 
-  /// \brief The information matrix type (1X1).
-  typedef double information_t;
+  // ToDo: Turn into matrix 
+  /// \brief The information matrix type (3x3).
+  typedef Eigen::Matrix3d information_t;
 
   /// \brief The covariance matrix type (same as information).
-  typedef double covariance_t;
+  typedef Eigen::Matrix3d covariance_t;
 
   /// \brief Default constructor.
-  DepthError();
+  DvlError();
 
   /// \brief Construct with homogeneous measurement and variance.
-  /// @param[in] measurement The measurement.
-  /// @param[in] variance The variance of the measurement, i.e. information_ has variance in its diagonal.
-  /// @param[in] T_SD Transformation from IMU/body frame to depth sensor frame.
-  /// TODO document.
-  DepthError(double depth, const information_t& information, double first_depth, const okvis::kinematics::Transformation& T_SD);
+  /// @param[in] velocity_m The measurement vector (velocity in the DVL frame).
+  /// @param[in] covariance_diag The diagonal of the covariance matrix (variance of the measurement).
+  /// @param[in] T_SV The transformation from DVL to imu sensor frame.
+  DvlError(const Eigen::Vector3d& velocity_m, 
+           const Eigen::Vector3d& covariance_diag, 
+           const okvis::kinematics::Transformation& T_SV);
 
   /// \brief Trivial destructor.
-  virtual ~DepthError() {}
+  virtual ~DvlError() {}
 
   // setters
   /// \brief Set the measurement.
   /// @param[in] measurement The measurement.
-  void setMeasurement(double depth, double first_depth) {
-    depth_ = depth;
-    first_depth_ = first_depth;
+  void setMeasurement(Eigen::Vector3d velocity_m) {
+    velocity_m_ = velocity_m;
   }
 
   /// \brief Set the information.
   /// @param[in] information The information (weight) matrix.
-  void setInformation(const information_t& information);
+  void setInformation(const Eigen::Vector3d& covariance_diag);
 
   /// \brief Set the transformation from IMU to depth sensor frame.
-  /// @param[in] T_SD The transformation.
-  void setTransformation(const okvis::kinematics::Transformation& T_SD);
+  /// @param[in] T_SV The transformation.
+  void setTransformation(const okvis::kinematics::Transformation& T_SV) {
+    T_SV_ = T_SV;
+  }
 
   // getters
   /// \brief Get the measurement.
   /// \return The measurement vector.
-  double depth() const { return depth_; }
+  Eigen::Vector3d getMeasurement() const { return velocity_m_; }
 
   /// \brief Get the information matrix.
   /// \return The information (weight) matrix.
@@ -111,7 +114,7 @@ class DepthError : public ::ceres::SizedCostFunction<1 /* number of residuals */
 
   /// \brief Get the covariance matrix.
   /// \return The inverse information (covariance) matrix.
-  const information_t& covariance() const { return covariance_; }
+  const covariance_t& covariance() const { return covariance_; }
 
   /**
    * @brief This evaluates the error term and additionally computes the Jacobians.
@@ -151,21 +154,20 @@ class DepthError : public ::ceres::SizedCostFunction<1 /* number of residuals */
   }
 
   /// @brief Return parameter block type as string
-  virtual std::string typeInfo() const { return "DepthError"; }
+  virtual std::string typeInfo() const { return "DvlError"; }
 
  protected:
   // the measurement
-  double depth_;  ///< The depth measurement.
-  double first_depth_;
-  okvis::kinematics::Transformation T_SD_;  ///< Transformation from depth to imu sensor frame.
+  Eigen::Vector3d velocity_m_;  ///< The velocity measurement.
+  okvis::kinematics::Transformation T_SV_;  ///< Transformation from DVL to imu sensor frame.
 
   // weighting related
-  information_t information_;            ///< The 1X1 information matrix.
-  information_t _squareRootInformation;  ///< The 1x1 square root information matrix.
-  covariance_t covariance_;              ///< The 1x1 covariance matrix.
+  information_t information_;            ///< The 3x3 information matrix.
+  information_t _squareRootInformation;  ///< The 3x3 square root information matrix.
+  covariance_t covariance_;              ///< The 3x3 covariance matrix.
 };
 
 }  // namespace ceres
 }  // namespace okvis
 
-#endif /* INCLUDE_OKVIS_CERES_DEPTHERROR_HPP_ */
+#endif /* INCLUDE_OKVIS_CERES_DVLERROR_HPP_ */

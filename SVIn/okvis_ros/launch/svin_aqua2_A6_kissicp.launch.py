@@ -77,7 +77,7 @@ def generate_launch_description():
         DeclareLaunchArgument('rate', default_value='1.0'),
         DeclareLaunchArgument('visualize', default_value='true'),
         DeclareLaunchArgument('use_loop_closure', default_value='true'),
-        DeclareLaunchArgument('external_odom_topic', default_value='/okvis/odometry'),
+        DeclareLaunchArgument('external_odom_topic', default_value='/okvis_odometry'),
         DeclareLaunchArgument(
             'save_directory',
             default_value='/home/xiaoming-zhao/Desktop/kiss_icp_results/',
