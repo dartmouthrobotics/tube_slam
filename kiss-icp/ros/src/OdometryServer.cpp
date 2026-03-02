@@ -218,27 +218,19 @@ void OdometryServer::RegisterFrame(const sensor_msgs::msg::PointCloud2::ConstSha
                     prev_external_pose_.inverse() * current_external_pose;
 
                 // replaces constant velocity prediction
-                static const Sophus::SE3d T_body_to_sonar = [] {
-                    Eigen::Matrix4d T_BS;
-                    T_BS << 0.0, 0.0, 1.0, -0.018,
-                            1.0, 0.0, 0.0, -0.016,
-                            0.0, 1.0, 0.0,  0.0,
-                            0.0, 0.0, 0.0,  1.0;
-
-                    Eigen::Matrix4d T_SL;
-                    T_SL <<  0.9862468258343937, -0.09268757943537663,  0.1368437495465809,  0.41799011160144334,
-                            -0.107351779587803,  -0.9887690131967909,   0.10397804242269817, -0.03917493072793546,
-                            0.12566938655526477, -0.11723843467452487, -0.9851204775064965,  0.21029060140820321,
-                            0.0,                  0.0,                  0.0,                  1.0;
-
-                    Eigen::Matrix4d result = T_SL * T_BS;
-
-                    Eigen::Quaterniond q(result.block<3,3>(0,0));
+                static const Sophus::SE3d T_imu_to_sonar = [] {
+                    Eigen::Matrix4d T;
+                    T <<  0.9862468251266422, -0.1073517794789277,   0.1256693861052262,  -0.44287400980852965,
+                         -0.09268757954046825, -0.988769013832527,   -0.11723843430762602,  0.024661674952076475,
+                          0.13684374989956352,  0.10397804279019335,  -0.9851204771155125,   0.1540355759232108,
+                          0.0,                  0.0,                   0.0,                   1.0;
+                
+                    Eigen::Quaterniond q(T.block<3,3>(0,0));
                     q.normalize();
-                    return Sophus::SE3d(q, result.block<3,1>(0,3));
+                    return Sophus::SE3d(q, T.block<3,1>(0,3));
                 }();
-
-                kiss_icp_->delta() = T_body_to_sonar * external_delta * T_body_to_sonar.inverse();
+                
+                kiss_icp_->delta() = T_imu_to_sonar * external_delta * T_imu_to_sonar.inverse();
 
                 RCLCPP_DEBUG(this->get_logger(),
                              "LOOSE COUPLING: SVIn delta t=[%.3f, %.3f, %.3f]",
