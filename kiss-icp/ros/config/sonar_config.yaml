@@ -10,6 +10,16 @@ kiss_icp_node:
     position_covariance: 0.1
     orientation_covariance: 0.1
 
+    use_external_odom: True
+    external_odom_topic: "/okvis_odometry"
+    
+    # Soft prior tuning
+    soft_prior:
+      max_alpha: 0.3
+      min_alpha: 0.05
+      high_trust_variance: 0.001
+      low_trust_variance: 0.1
+
     # Core KISS-ICP parameters
     data:
       deskew: False             # 
